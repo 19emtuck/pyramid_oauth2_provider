@@ -18,8 +18,16 @@ requires = [
     'cryptography'
     ]
 
+# List of dependencies installed via `pip install -e ".[dev]"`
+# by virtue of the Setuptools `extras_require` value in the Python
+# dictionary below.
+dev_requires = [
+    'pyramid_debugtoolbar',
+    'pytest',
+]
+
 setup(name='pyramid_oauth2_provider',
-      version='0.2',
+      version='0.3',
       description='Oauth2 endpoint for pyramid applications',
       long_description=README,
       classifiers=[
@@ -37,6 +45,9 @@ setup(name='pyramid_oauth2_provider',
       zip_safe=False,
       test_suite='pyramid_oauth2_provider',
       install_requires=requires,
+      extras_require={
+          'dev': dev_requires,
+      },
       entry_points="""\
       [paste.app_factory]
       main = pyramid_oauth2_provider:main

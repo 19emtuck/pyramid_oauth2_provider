@@ -15,6 +15,7 @@ import sys
 import json
 
 from sqlalchemy import engine_from_config
+import transaction
 
 from pyramid.paster import (
     get_appsettings,
@@ -22,8 +23,10 @@ from pyramid.paster import (
     )
 
 from ..models import (
-    DBSession,
     Base,
+    get_engine,
+    get_session_factory,
+    get_tm_session,
     )
 
 def usage(argv):
@@ -35,12 +38,17 @@ def usage(argv):
 def main(argv=sys.argv):
     if len(argv) != 3:
         usage(argv)
+
     config_uri = argv[1]
     drop = json.loads(argv[2].lower())
     setup_logging(config_uri)
     settings = get_appsettings(config_uri)
     engine = engine_from_config(settings, 'sqlalchemy.')
-    DBSession.configure(bind=engine)
-    if drop:
-        Base.metadata.drop_all(engine)
-    Base.metadata.create_all(engine)
+
+    session_factory = get_session_factory(engine)
+    with transaction.manager:
+        dbsession = get_tm_session(session_factory, transaction.manager)
+
+        if drop:
+            Base.metadata.drop_all(engine)
+        Base.metadata.create_all(engine)

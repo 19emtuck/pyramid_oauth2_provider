@@ -26,12 +26,10 @@ from pyramid.response import Response
 from . import jsonerrors
 from .views import oauth2_token
 from .views import oauth2_authorize
-from .models import DBSession
 from .models import Oauth2Token
 from .models import Oauth2Client
 from .models import Oauth2Code
 from .models import Oauth2RedirectUri
-from .models import initialize_sql
 from .interfaces import IAuthCheck
 
 _auth_value = None
@@ -48,15 +46,31 @@ class TestCase(unittest.TestCase):
     def setUp(self):
         # Random salt for tests, don't use for config!
         self.config = testing.setUp(
-            settings = {'oauth2_provider.salt': 'r+H5LT6EvgSSKFMZ2brdzQ=='})
+            settings = {'oauth2_provider.salt': 'r+H5LT6EvgSSKFMZ2brdzQ==',
+                        'sqlalchemy.url': 'sqlite:///:memory:'
+                })
         self.config.registry.registerUtility(AuthCheck, IAuthCheck)
 
-        engine = create_engine('sqlite://')
-        initialize_sql(engine, self.config)
+        self.config.include('.models')
+        settings = self.config.get_settings()
 
+        from .models import (
+            get_engine,
+            get_session_factory,
+            get_tm_session,
+            )
+
+        self.engine = get_engine(settings)
+        session_factory = get_session_factory(self.engine)
+
+        self.session = get_tm_session(session_factory, transaction.manager)
         self.auth = 1
 
         self.redirect_uri = 'http://localhost'
+
+    def init_database(self):
+        from .models import Base
+        Base.metadata.create_all(self.engine)
 
     def _get_auth(self):
         global _auth_value
@@ -79,8 +93,11 @@ class TestCase(unittest.TestCase):
     redirect_uri = property(_get_redirect_uri, _set_redirect_uri)
 
     def tearDown(self):
-        DBSession.remove()
+        from .models import Base
         testing.tearDown()
+
+        transaction.abort()
+        Base.metadata.drop_all(self.engine)
 
     def getAuthHeader(self, username, password, scheme='Basic'):
         encoded = base64.b64encode(('%s:%s' % (username, password)).encode('utf8'))
@@ -89,6 +106,7 @@ class TestCase(unittest.TestCase):
 class TestAuthorizeEndpoint(TestCase):
     def setUp(self):
         TestCase.setUp(self)
+        self.init_database()
         self.client = self._create_client()
         self.request = self._create_request()
         self.config.testing_securitypolicy(self.auth)
@@ -101,13 +119,13 @@ class TestAuthorizeEndpoint(TestCase):
     def _create_client(self):
         with transaction.manager:
             client = Oauth2Client()
-            DBSession.add(client)
+            self.session.add(client)
             client_id = client.client_id
 
             redirect_uri = Oauth2RedirectUri(client, self.redirect_uri)
-            DBSession.add(redirect_uri)
+            self.session.add(redirect_uri)
 
-        client = DBSession.query(Oauth2Client).filter_by(client_id=client_id).first()
+        client = self.session.query(Oauth2Client).filter_by(client_id=client_id).first()
         return client
 
     def _create_request(self):
@@ -116,7 +134,7 @@ class TestAuthorizeEndpoint(TestCase):
             'client_id': self.client.client_id
         }
 
-        request = testing.DummyRequest(params=data)
+        request = testing.DummyRequest(params=data, dbsession=self.session)
         request.scheme = 'https'
 
         return request
@@ -127,7 +145,7 @@ class TestAuthorizeEndpoint(TestCase):
             'client_id': self.client.client_id
         }
 
-        request = testing.DummyRequest(post=data)
+        request = testing.DummyRequest(post=data, dbsession=self.session)
         request.scheme = 'https'
 
         return request
@@ -152,7 +170,7 @@ class TestAuthorizeEndpoint(TestCase):
 
         self.assertTrue('code' in params)
 
-        dbauthcodes = DBSession.query(Oauth2Code).filter_by(
+        dbauthcodes = self.session.query(Oauth2Code).filter_by(
             authcode=params.get('code')).all()
 
         self.assertTrue(len(dbauthcodes) == 1)
@@ -190,14 +208,14 @@ class TestAuthorizeEndpoint(TestCase):
     def testMultipleRedirectUrisUnspecified(self):
         with transaction.manager:
             redirect_uri = Oauth2RedirectUri(self.client, 'https://otherhost.com')
-            DBSession.add(redirect_uri)
+            self.session.add(redirect_uri)
         response = self._process_view()
         self.assertTrue(isinstance(response, jsonerrors.HTTPBadRequest))
 
     def testMultipleRedirectUrisSpecified(self):
         with transaction.manager:
             redirect_uri = Oauth2RedirectUri(self.client, 'https://otherhost.com')
-            DBSession.add(redirect_uri)
+            self.session.add(redirect_uri)
         self.request.params['redirect_uri'] = 'https://otherhost.com'
         self.redirect_uri = 'https://otherhost.com'
         response = self._process_view()
@@ -208,7 +226,7 @@ class TestAuthorizeEndpoint(TestCase):
         with transaction.manager:
             redirect_uri = Oauth2RedirectUri(
                 self.client, uri)
-            DBSession.add(redirect_uri)
+            self.session.add(redirect_uri)
         self.request.params['redirect_uri'] = uri
         self.redirect_uri = uri
         response = self._process_view()
@@ -233,6 +251,7 @@ class TestAuthorizeEndpoint(TestCase):
 class TestTokenEndpoint(TestCase):
     def setUp(self):
         TestCase.setUp(self)
+        self.init_database()
         self.client, self.client_secret = self._create_client()
         self.request = self._create_request()
 
@@ -245,10 +264,10 @@ class TestTokenEndpoint(TestCase):
         with transaction.manager:
             client = Oauth2Client()
             client_secret = client.new_client_secret()
-            DBSession.add(client)
+            self.session.add(client)
             client_id = client.client_id
 
-        client = DBSession.query(Oauth2Client).filter_by(
+        client = self.session.query(Oauth2Client).filter_by(
             client_id=client_id).first()
         return client, client_secret
 
@@ -263,7 +282,7 @@ class TestTokenEndpoint(TestCase):
             'password': 'foo',
         }
 
-        request = testing.DummyRequest(post=data, headers=headers)
+        request = testing.DummyRequest(post=data, headers=headers, dbsession=self.session)
         request.scheme = 'https'
 
         return request
@@ -279,7 +298,7 @@ class TestTokenEndpoint(TestCase):
             'user_id': str(user_id),
         }
 
-        request = testing.DummyRequest(post=data, headers=headers)
+        request = testing.DummyRequest(post=data, headers=headers, dbsession=self.session)
         request.scheme = 'https'
 
         return request
@@ -298,7 +317,7 @@ class TestTokenEndpoint(TestCase):
         self.assertEqual(len(token.get('refresh_token')), 64)
         self.assertEqual(len(token), 5)
 
-        dbtoken = DBSession.query(Oauth2Token).filter_by(
+        dbtoken = self.session.query(Oauth2Token).filter_by(
             access_token=token.get('access_token')).first()
 
         self.assertEqual(dbtoken.user_id, token.get('user_id'))
@@ -421,7 +440,7 @@ class TestTokenEndpoint(TestCase):
         token = self._process_view()
         self._validate_token(token)
 
-        dbtoken = DBSession.query(Oauth2Token).filter_by(
+        dbtoken = self.session.query(Oauth2Token).filter_by(
             access_token=token.get('access_token')).first()
         dbtoken.revoke()
 
@@ -434,7 +453,7 @@ class TestTokenEndpoint(TestCase):
         token = self._process_view()
         self._validate_token(token)
 
-        dbtoken = DBSession.query(Oauth2Token).filter_by(
+        dbtoken = self.session.query(Oauth2Token).filter_by(
             access_token=token.get('access_token')).first()
         dbtoken.expires_in = 0
 
@@ -444,7 +463,7 @@ class TestTokenEndpoint(TestCase):
         token = self._process_view()
         self._validate_token(token)
 
-        dbtoken = DBSession.query(Oauth2Token).filter_by(
+        dbtoken = self.session.query(Oauth2Token).filter_by(
             access_token=token.get('access_token')).first()
         dbtoken.expires_in = 10
 

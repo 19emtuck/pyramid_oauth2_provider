@@ -16,7 +16,8 @@ from pyramid.config import Configurator
 from pyramid.exceptions import ConfigurationError
 from pyramid.interfaces import IAuthenticationPolicy
 
-from .models import initialize_sql
+from pyramid.authorization import ACLAuthorizationPolicy
+
 from .interfaces import IAuthCheck
 from .authentication import OauthAuthenticationPolicy
 
@@ -25,9 +26,13 @@ from . import tests
 
 def includeme(config):
     settings = config.registry.settings
-    engine = engine_from_config(settings, 'sqlalchemy.')
 
-    initialize_sql(engine, settings)
+    config.include('.models')
+
+    # Security policies
+    # a default authorization policy is mandatory
+    authz_policy = ACLAuthorizationPolicy()
+    config.set_authorization_policy(authz_policy)
 
     if not config.registry.queryUtility(IAuthenticationPolicy):
         config.set_authentication_policy(OauthAuthenticationPolicy())

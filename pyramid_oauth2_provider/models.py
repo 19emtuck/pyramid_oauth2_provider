@@ -17,22 +17,22 @@ from base64 import b64decode
 from sqlalchemy import Column
 from sqlalchemy import ForeignKey
 
-from sqlalchemy import Binary
+from sqlalchemy import LargeBinary
 from sqlalchemy import String
 from sqlalchemy import Integer
 from sqlalchemy import Boolean
 from sqlalchemy import DateTime
 from sqlalchemy import Unicode
+from sqlalchemy import engine_from_config
 
 from sqlalchemy.ext.declarative import declarative_base
+import zope.sqlalchemy
 
 from sqlalchemy.orm import backref
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.orm import scoped_session
 from sqlalchemy.orm import synonym
-
-from zope.sqlalchemy import ZopeTransactionExtension
 
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 from cryptography.hazmat.backends import default_backend
@@ -42,7 +42,6 @@ from .generators import gen_token
 from .generators import gen_client_id
 from .generators import gen_client_secret
 
-DBSession = scoped_session(sessionmaker(extension=ZopeTransactionExtension()))
 Base = declarative_base()
 backend = default_backend()
 
@@ -51,7 +50,7 @@ class Oauth2Client(Base):
     __tablename__ = 'oauth2_provider_clients'
     id = Column(Integer, primary_key=True)
     client_id = Column(Unicode(64), unique=True, nullable=False)
-    _client_secret = Column(Binary(255), nullable=False)
+    _client_secret = Column(LargeBinary(length=255), nullable=False)
     revoked = Column(Boolean, default=False)
     revocation_date = Column(DateTime)
     _salt = None
@@ -206,7 +205,61 @@ class Oauth2Token(Base):
         return kwargs
 
 
-def initialize_sql(engine, settings):
-    DBSession.configure(bind=engine)
-    Base.metadata.bind = engine
-    Base.metadata.create_all(engine)
+def get_engine(settings, prefix='sqlalchemy.'):
+    return engine_from_config(settings, prefix)
+
+
+def get_session_factory(engine):
+    factory = sessionmaker()
+    factory.configure(bind=engine)
+    return factory
+
+
+def get_tm_session(session_factory, transaction_manager):
+    """
+    Get a ``sqlalchemy.orm.Session`` instance backed by a transaction.
+
+    This function will hook the session to the transaction manager which
+    will take care of committing any changes.
+
+    - When using pyramid_tm it will automatically be committed or aborted
+      depending on whether an exception is raised.
+
+    - When using scripts you should wrap the session in a manager yourself.
+      For example::
+
+          import transaction
+
+          engine = get_engine(settings)
+          session_factory = get_session_factory(engine)
+          with transaction.manager:
+              dbsession = get_tm_session(session_factory, transaction.manager)
+
+    """
+    dbsession = session_factory()
+    zope.sqlalchemy.register(dbsession,
+                             transaction_manager=transaction_manager)
+    return dbsession
+
+def includeme(config):
+    """
+    Initialize the model for a Pyramid app.
+
+    Activate this setup using ``config.include('test_alch.models')``.
+
+    """
+    settings = config.get_settings()
+    settings['tm.manager_hook'] = 'pyramid_tm.explicit_manager'
+
+    # use pyramid_tm to hook the transaction lifecycle to the request
+    config.include('pyramid_tm')
+
+    session_factory = get_session_factory(get_engine(settings))
+    config.registry['dbsession_factory'] = session_factory
+
+    # make request.dbsession available for use in Pyramid
+    config.add_request_method(
+        # r.tm is the transaction manager used by pyramid_tm
+        lambda r: get_tm_session(session_factory, r.tm),
+        'dbsession',
+        reify=True)

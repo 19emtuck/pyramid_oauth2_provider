@@ -22,7 +22,6 @@ from pyramid.httpexceptions import HTTPBadRequest
 from pyramid.httpexceptions import HTTPUnauthorized
 
 from .models import Oauth2Token
-from .models import DBSession as db
 from .errors import InvalidToken
 from .errors import InvalidRequest
 from .util import getClientCredentials

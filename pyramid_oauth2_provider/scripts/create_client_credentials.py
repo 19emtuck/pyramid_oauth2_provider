@@ -23,15 +23,15 @@ from pyramid.paster import (
     )
 
 from pyramid_oauth2_provider.models import (
-    DBSession,
-    initialize_sql,
     Oauth2Client,
+    get_session_factory,
+    get_tm_session
     )
 
-def create_client(salt=None):
+def create_client(dbsession, salt=None):
     client = Oauth2Client(salt=salt)
     client_secret = client.new_client_secret()
-    DBSession.add(client)
+    dbsession.add(client)
     return client.client_id, client_secret
 
 def usage(argv):
@@ -46,6 +46,8 @@ def main(argv=sys.argv):
     config_uri = argv[1]
     section = argv[2]
     setup_logging(config_uri)
+
+    print("loading configuration section", section)
     settings = get_appsettings(config_uri, section)
     engine = engine_from_config(settings, 'sqlalchemy.')
     try:
@@ -54,10 +56,11 @@ def main(argv=sys.argv):
         raise ValueError(
             'oauth2_provider.salt configuration required.'
         )
-    initialize_sql(engine, settings)
 
+    session_factory = get_session_factory(engine)
     with transaction.manager:
-        id, secret = create_client(salt=salt)
+        dbsession = get_tm_session(session_factory, transaction.manager)
+        id, secret = create_client(dbsession, salt=salt)
         print('client_id:', id)
         print('client_secret:', secret)
 
