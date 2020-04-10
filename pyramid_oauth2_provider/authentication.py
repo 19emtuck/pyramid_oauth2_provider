@@ -42,7 +42,7 @@ class OauthAuthenticationPolicy(CallbackAuthenticationPolicy):
         if token_type != 'bearer':
             return None
 
-        auth_token = db.query(Oauth2Token).filter_by(access_token=token).first()
+        auth_token = request.dbsession.query(Oauth2Token).filter_by(access_token=token).first()
         # Bad input, return 400 Invalid Request
         if not auth_token:
             raise HTTPBadRequest(InvalidRequest())
