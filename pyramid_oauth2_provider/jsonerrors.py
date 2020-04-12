@@ -62,6 +62,7 @@ ${html_comment}
                     html_comment = escape(comment)
             else:
                 self.content_type = 'aplication/json'
+                self.charset      = 'UTF-8'
                 escape = _quote_escape
                 page_template = self.json_template_obj
                 br = '\n'
@@ -80,10 +81,11 @@ ${html_comment}
                 args[k] = escape(v)
             for k, v in list(self.headers.items()):
                 args[k.lower()] = escape(v)
+
             page = page_template.substitute(status=self.status,
                 code=self.code, **args)
             if isinstance(page, text_type):
-                page = page.encode(self.charset)
+                page = page.encode(self.charset if self.charset else 'UTF-8')
             self.app_iter = [page]
             self.body = page
 
