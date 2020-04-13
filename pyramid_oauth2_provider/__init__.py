@@ -53,6 +53,6 @@ def includeme(config):
 def main(global_config, **settings):
     """ This function returns a Pyramid WSGI application.
     """
-    config = Configurator(settings=settings)
+    config = Configurator(settings=settings, root_factory='pyramid_oauth2_provider.security.RootFactory')
     includeme(config)
     return config.make_wsgi_app()
